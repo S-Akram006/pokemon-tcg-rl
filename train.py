@@ -1,85 +1,105 @@
 import torch
 import torch.optim as optim
+import torch.nn.functional as F
 import numpy as np
 
 from state_encoder import StateEncoder
 from action_masker import ActionMasker, ACTION_SPACE
 from model import PokemonTCGPolicy
+from game_env import PokemonBattleEnv
+from baseline_agent import BaselineRuleAgent
 
-def train():
+def train_a2c():
     state_encoder = StateEncoder()
     action_masker = ActionMasker()
+    env = PokemonBattleEnv()
+    baseline = BaselineRuleAgent()
+    
     policy_net = PokemonTCGPolicy(state_dim=65, action_dim=len(ACTION_SPACE))
-    optimizer = optim.Adam(policy_net.parameters(), lr=1e-3)
+    optimizer = optim.Adam(policy_net.parameters(), lr=3e-4)
 
-    num_episodes = 200
-    print(f"=== RE-TRAINING RL POLICY ({num_episodes} EPISODES WITH INCENTIVIZED REWARDS) ===")
+    num_episodes = 300
+    gamma = 0.95
+    print(f"=== TRAINING 12-ACTION REGULATION A2C AGENT ({num_episodes} EPISODES) ===")
 
     for episode in range(1, num_episodes + 1):
-        log_probs = []
-        rewards = []
+        raw_state = env.reset()
+        done = False
         
-        for turn in range(15):
-            # Mock turn state
-            dummy_state = {
-                "player_active": 374,
-                "player_bench": [744],
-                "opponent_active": 804,
-                "opponent_bench": [],
-                "player_hand": [1, 2, 3],
-                "player_prizes": 6,
-                "opponent_prizes": 6
-            }
-            
-            state_tensor = torch.from_numpy(state_encoder.encode_state(dummy_state)).unsqueeze(0).float()
-            legal_actions = ["ATTACH_ENERGY", "ATTACK", "PASS_TURN"]
-            mask_tensor = torch.from_numpy(action_masker.get_action_mask(legal_actions)).unsqueeze(0).float()
+        episode_reward = 0.0
+        policy_losses = []
+        value_losses = []
+        entropies = []
 
-            action_probs, _ = policy_net(state_tensor, mask_tensor)
+        turn_count = 0
+        while not done and turn_count < 40:
+            turn_count += 1
+            
+            # --- Player 1 (RL Agent) Turn ---
+            legal_actions = env.get_legal_actions(is_p1=True)
+            state_vec = state_encoder.encode_state(raw_state)
+            state_tensor = torch.from_numpy(state_vec).unsqueeze(0).float()
+            
+            mask_vec = action_masker.get_action_mask(legal_actions)
+            mask_tensor = torch.from_numpy(mask_vec).unsqueeze(0).float()
+
+            action_probs, state_value = policy_net(state_tensor, mask_tensor)
             dist = torch.distributions.Categorical(action_probs)
             action_idx = dist.sample()
             selected_action = ACTION_SPACE[action_idx.item()]
             
+            next_state, reward, done, _ = env.step(selected_action, is_p1=True)
+            episode_reward += reward
+
+            if done:
+                next_val = 0.0
+            else:
+                next_vec = state_encoder.encode_state(next_state)
+                next_tensor = torch.from_numpy(next_vec).unsqueeze(0).float()
+                with torch.no_grad():
+                    _, next_val_t = policy_net(next_tensor)
+                    next_val = next_val_t.item()
+
+            td_target = reward + gamma * next_val
+            advantage = td_target - state_value.item()
+
             log_prob = dist.log_prob(action_idx)
+            entropy = dist.entropy()
 
-            # --- INCENTIVIZED REWARD STRUCTURE ---
-            if selected_action == "ATTACK":
-                reward = 1.0
-            elif selected_action == "ATTACH_ENERGY":
-                reward = 0.5
-            else:  # PASS_TURN
-                reward = -0.5
-            
-            log_probs.append(log_prob)
-            rewards.append(reward)
+            policy_losses.append(-log_prob * advantage)
+            v_loss = F.smooth_l1_loss(state_value.squeeze(-1), torch.tensor([td_target], dtype=torch.float32))
+            value_losses.append(v_loss)
+            entropies.append(entropy)
 
-        # Policy gradient calculation
-        discounted_rewards = []
-        gamma = 0.99
-        R = 0
-        for r in reversed(rewards):
-            R = r + gamma * R
-            discounted_rewards.insert(0, R)
+            raw_state = next_state
 
-        discounted_rewards = torch.tensor(discounted_rewards, dtype=torch.float32)
-        if len(discounted_rewards) > 1:
-            discounted_rewards = (discounted_rewards - discounted_rewards.mean()) / (discounted_rewards.std() + 1e-8)
+            if done:
+                break
 
-        policy_loss = []
-        for lp, r in zip(log_probs, discounted_rewards):
-            policy_loss.append(-lp * r)
+            # --- Player 2 (Baseline Agent) Turn ---
+            p2_legal = env.get_legal_actions(is_p1=False)
+            p2_state = env.get_state(is_p1=False)
+            p2_action = baseline.select_action(p2_state, p2_legal)
+            raw_state, _, done, _ = env.step(p2_action, is_p1=False)
 
-        optimizer.zero_grad()
-        total_loss = torch.cat(policy_loss).sum()
-        total_loss.backward()
-        optimizer.step()
+        # Backpropagation
+        if policy_losses:
+            optimizer.zero_grad()
+            total_policy_loss = torch.stack(policy_losses).sum()
+            total_value_loss = torch.stack(value_losses).sum()
+            total_entropy = torch.stack(entropies).sum()
 
-        if episode % 50 == 0 or episode == 1:
-            print(f"Episode {episode:03d}/{num_episodes} | Total Reward: {sum(rewards):.2f} | Loss: {total_loss.item():.4f}")
+            total_loss = total_policy_loss + 0.5 * total_value_loss - 0.01 * total_entropy
+            total_loss.backward()
+            torch.nn.utils.clip_grad_norm_(policy_net.parameters(), max_norm=0.5)
+            optimizer.step()
+
+        if episode % 30 == 0 or episode == 1:
+            print(f"Episode {episode:03d}/{num_episodes} | Ep Reward: {episode_reward:5.2f} | Loss: {total_loss.item():6.4f} | Turns: {turn_count}")
 
     checkpoint_path = "data/best_model.pt"
     torch.save(policy_net.state_dict(), checkpoint_path)
-    print(f"\n=== RETRAINING COMPLETE: Model Checkpoint Saved to {checkpoint_path} ===")
+    print(f"\n=== TRAINING FINISHED: Saved 12-Action Weights to {checkpoint_path} ===")
 
 if __name__ == "__main__":
-    train()
+    train_a2c()

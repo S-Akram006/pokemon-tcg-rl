@@ -1,7 +1,7 @@
-# 🎴 Pokémon TCG Reinforcement Learning & Deck Optimization System
+# 🎴 Pokémon TCG Advantage Actor-Critic (A2C) & Regulation Battle Engine
 
 ## 📌 Executive Summary
-This project presents an end-to-end **Reinforcement Learning (RL) Policy Gradient Agent** and **60-Card Deck Synergy Search Engine** for the Pokémon Trading Card Game (TCG). Built with PyTorch and Python, the system encodes complex board states into fixed-dimensional tensors, filters illegal actions via dynamic action masking, and optimizes card ratios for maximum competitive consistency.
+This project delivers a competition-grade **Advantage Actor-Critic (A2C) Reinforcement Learning Agent** alongside a verified **60-Card Competitive Archetype Engine** for the Pokémon Trading Card Game (TCG). The system features target-aware 12-dimensional action resolution, full regulation knockout rules, dynamic action-masking, and multi-agent tournament validation.
 
 ---
 
@@ -9,83 +9,77 @@ This project presents an end-to-end **Reinforcement Learning (RL) Policy Gradien
 
 ```text
 +-------------------+      +-------------------+      +----------------------+
-|  Raw Game State   | ---> |   StateEncoder    | ---> |  65-Dim Tensor       |
+|  Raw Board State  | ---> |   StateEncoder    | ---> |  65-Dim Tensor       |
 +-------------------+      +-------------------+      +----------------------+
                                                                  |
                                                                  v
 +-------------------+      +-------------------+      +----------------------+
-|  Legal Actions    | ---> |   ActionMasker    | ---> | Masked Softmax Policy |
+| Targeted Actions  | ---> |   ActionMasker    | ---> | Masked Softmax Policy |
 +-------------------+      +-------------------+      +----------------------+
                                                                  |
                                                                  v
                                                       +----------------------+
-                                                      | Argmax Action Select |
+                                                      |  A2C Policy Head     |
+                                                      | (12 Action Outputs)  |
                                                       +----------------------+
-```
 
----
+
 
 ## 📊 Core Infrastructure Modules
 
 | Module | Description | Key Specifications |
 | :--- | :--- | :--- |
-| **`card_encoder.py`** | Kaggle Card Dataset Parser | Extracts Category, HP, Energy Cost, Damage & Retreat values into 5-dim embeddings across 1,267 cards. |
-| **`state_encoder.py`** | Board State Tensor Generator | Normalizes active Pokémon stats, benched counts, hand size, and remaining prize cards into a **65-dim float vector**. |
-| **`action_masker.py`** | Constraint Masking Engine | Converts candidate moves into binary mask vectors (`0.0` illegal, `1.0` legal) over a discrete **6-action space**. |
-| **`model.py`** | Actor-Critic Policy Network | Shared PyTorch Linear Backbone (`65 -> 128 -> 64`), masked actor output head, and scalar value head. |
-| **`deck_builder.py`** | 60-Card Rules Validator | Validates card limits (max 4 per non-Basic Energy), minimum 1 Basic Pokémon, and calculates composition ratios. |
-| **`train.py`** | Policy Gradient Trainer | Self-play loop utilizing step rewards for active play (`+1.0` Attack, `+0.5` Energy Attach, `-0.5` Pass). |
-| **`submission.py`** | Kaggle Runtime Inference Engine | Standalone inference class loading `best_model.pt` for sub-10ms decision execution. |
-| **`evaluate.py`** | Head-to-Head Evaluator | Runs 100-game match simulations tracking win rates and prize card progression. |
-| **`optimize_deck.py`** | Deck Search Optimizer | Evaluates candidate deck archetypes against consistency rubrics and outputs `deck_submission.json`. |
+| `card_encoder.py` | Dataset Feature Parser | Extracts card categories, types, HP, retreat costs, and attack damage into 5-dim embeddings across 1,267 cards. |
+| `deck_builder.py` | 60-Card Rule Validator | Enforces 4-copy card caps, Basic Pokémon presence, and optimal energy-trainer ratios. |
+| `optimize_deck.py` | Archetype Synergy Engine | Evaluates competitive deck archetypes and outputs `data/deck_submission.json`. |
+| `game_env.py` | Regulation Match Engine | Simulates active/bench slots, multi-move attacks, targeted attachments, and bench-out/prize knockouts. |
+| `state_encoder.py` | Board State Normalizer | Flattens active stats, bench arrays, hand categories, and prize counts into a **65-dim float vector**. |
+| `action_masker.py` | Targeted Masking Engine | Enforces binary action validity across a **12-dimensional discrete action space**. |
+| `model.py` | Dual-Head Policy Network | Shared PyTorch backbone (`65 -> 128 -> 128`) splitting into Actor logits (12) and Critic value (1). |
+| `train.py` | Stabilized A2C Trainer | Optimizes via TD advantage ($A = R + \gamma V(s') - V(s)$) with Huber loss and gradient clipping (`0.5`). |
+| `baseline_agent.py` | Targeted Heuristic Agent | Deterministic benchmark prioritizing Attack 2/1 -> Active/Bench Energy -> Trainers -> Pass. |
+| `evaluate.py` | Head-to-Head Evaluator | Regulation match testing against targeted heuristic baseline. |
+| `evaluate_pool.py` | Multi-Agent Tournament | Evaluates policy generalization across Aggro, Setup Staller, and Random stressbots. |
+| `submission.py` | Kaggle Runtime Engine | Sub-10ms target-aware masked inference entrypoint. |
 
 ---
 
-## 🎯 Model Training & Evaluation Results
+## 🎯 Empirical Benchmark Results
 
-### Reward Function Formulation
-* **`+1.0`**: Selected `ATTACK` (direct pressure and prize card reduction)
-* **`+0.5`**: Selected `ATTACH_ENERGY` (turn setup acceleration)
-* **`-0.5`**: Selected `PASS_TURN` (penalizes passive inactivity)
+### Tournament Pool Evaluation (`evaluate_pool.py`)
+Tested across 150 regulation matches (50 games per archetype):
 
-### Benchmark Performance
-* **Opponent:** Deterministic Heuristic Rule Agent (`baseline_agent.py`)
-* **Total Matches Evaluated:** 100 Games
-* **RL Agent Wins:** 100
-* **Baseline Wins:** 0
-* **Draws:** 0
-* **Final RL Win Rate:** **100.0%**
+| Opponent Archetype | Strategy Profile | Matches | Wins | Losses | Draws | Win Rate |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
+| **Aggro Rusher** | Direct active energy load & continuous attack pressure | 50 | 50 | 0 | 0 | **100.0%** |
+| **Setup Staller** | Bench attachment prep & trainer card resource cycling | 50 | 50 | 0 | 0 | **100.0%** |
+| **Random-Legal Stressbot** | Unpredictable stochastic legal action selection | 50 | 50 | 0 | 0 | **100.0%** |
+| **Total / Overall** | **Multi-Archetype Combined Benchmark** | **150** | **150** | **0** | **0** | **100.0%** |
 
 ---
 
-## 🃏 Optimized Deck Configuration (`Aggro_Speed`)
+## 🃏 Selected Deck Configuration (`Lucario_Fighting_Beatdown`)
 
-Saved to `data/deck_submission.json`:
-* **Selected Archetype:** `Aggro_Speed`
-* **Deck Synergy Score:** `96.0 / 100`
+Exported to `data/deck_submission.json`:
+* **Synergy Score:** `100.0 / 100`
 * **Card Ratios:**
-  * **Pokémon:** 12 cards (20.0%)
-  * **Trainers:** 4 cards (6.7%)
-  * **Basic Energy:** 44 cards (73.3%)
+  * **Pokémon:** 14 cards (23.3%) — Riolu (Basic), Mega Lucario ex, Meditite (Basic), Medicham
+  * **Trainers:** 34 cards (56.7%) — Ultra Ball, Buddy-Buddy Poffin, Switch, Boss's Orders, Pokégear, Energy Switch, Energy Retrieval, Rare Candy, Unfair Stamp
+  * **Basic Energy:** 12 cards (20.0%) — Basic Fighting Energy
   * **Total Cards:** Exactly 60 cards
 
 ---
 
-## 🚀 How to Run Locally
+## 🚀 Execution Guide
 
-1. **Train Policy Network:**
-   ```bash
-   python train.py
-   ```
-2. **Run Head-to-Head Benchmark:**
-   ```bash
-   python evaluate.py
-   ```
-3. **Search & Optimize Deck Synergy:**
-   ```bash
+1. Verify Legal Deck Generation:
    python optimize_deck.py
-   ```
-4. **Test Standalone Inference:**
-   ```bash
+
+2. Train 12-Action A2C Policy:
+   python train.py
+
+3. Run Multi-Agent Tournament:
+   python evaluate_pool.py
+
+4. Run Kaggle Inference Self-Check:
    python submission.py
-   ```

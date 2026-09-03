@@ -1,12 +1,17 @@
 import numpy as np
 
-# Total master action space definition
+# Granular targeted master action space
 ACTION_SPACE = [
-    "ATTACH_ENERGY",
+    "ATTACK_1",
+    "ATTACK_2",
+    "ATTACH_ENERGY_ACTIVE",
+    "ATTACH_ENERGY_BENCH_0",
+    "ATTACH_ENERGY_BENCH_1",
+    "ATTACH_ENERGY_BENCH_2",
+    "ATTACH_ENERGY_BENCH_3",
+    "ATTACH_ENERGY_BENCH_4",
     "PLAY_BENCH_POKEMON",
-    "EVOLVE_POKEMON",
     "USE_TRAINER_CARD",
-    "ATTACK",
     "RETREAT",
     "PASS_TURN"
 ]
@@ -18,35 +23,38 @@ class ActionMasker:
 
     def get_action_mask(self, legal_actions):
         """
-        Generates a binary vector (1 for legal, 0 for illegal) 
-        matching the master action space size.
+        Builds an exact binary mask vector for targeted legal actions.
+        Matches exact action strings, with smart fallback to sub-prefixes.
         """
         mask = np.zeros(len(self.action_space), dtype=np.float32)
         
-        for action in legal_actions:
-            # Match base action types
-            base_action = action.split("_")[0] if "_" in action else action
-            for full_action, idx in self.action_to_idx.items():
-                if full_action.startswith(base_action):
+        for legal_act in legal_actions:
+            # 1. Exact match
+            if legal_act in self.action_to_idx:
+                mask[self.action_to_idx[legal_act]] = 1.0
+                continue
+                
+            # 2. Base prefix match fallback
+            base = legal_act.split("_")[0]
+            for full_act, idx in self.action_to_idx.items():
+                if full_act.startswith(base):
                     mask[idx] = 1.0
                     
+        # Guarantee PASS_TURN is valid if all masked
+        if mask.sum() == 0.0:
+            mask[self.action_to_idx["PASS_TURN"]] = 1.0
+            
         return mask
 
     def mask_logits(self, logits, mask, invalid_penalty=-1e9):
-        """
-        Applies action mask to network logits (sets illegal actions to large negative numbers).
-        """
+        """Penalizes illegal action logits towards negative infinity."""
         return logits + (1.0 - mask) * invalid_penalty
 
 if __name__ == "__main__":
     masker = ActionMasker()
-    
-    # Example turn legal actions from game engine
-    sample_legal_actions = ["ATTACH_ENERGY", "ATTACK", "PASS_TURN"]
-    
-    binary_mask = masker.get_action_mask(sample_legal_actions)
-    
-    print("=== ACTION MASKER TEST SUCCESSFUL ===")
-    print(f"Master Action Space ({len(ACTION_SPACE)} actions): {ACTION_SPACE}")
-    print(f"Legal Input Actions: {sample_legal_actions}")
-    print(f"Generated Mask Vector: {binary_mask}")
+    test_legal = ["ATTACK_1", "ATTACH_ENERGY_ACTIVE", "PASS_TURN"]
+    mask = masker.get_action_mask(test_legal)
+    print("=== TARGET-AWARE ACTION MASKER INITIALIZED ===")
+    print(f"Action Space Size: {len(ACTION_SPACE)}")
+    print(f"Legal Input: {test_legal}")
+    print(f"Generated Binary Mask: {mask}")

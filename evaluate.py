@@ -1,23 +1,6 @@
-import numpy as np
 from submission import PokemonTCGAgent
 from baseline_agent import BaselineRuleAgent
-
-class SimulatedGameEnvironment:
-    """Tracks persistent game state across turns for evaluation."""
-    def __init__(self):
-        self.p1_prizes = 6
-        self.p2_prizes = 6
-        
-    def get_state(self, is_p1=True):
-        return {
-            "player_active": 374,
-            "player_bench": [744],
-            "opponent_active": 804,
-            "opponent_bench": [],
-            "player_hand": [1, 2, 3],
-            "player_prizes": self.p1_prizes if is_p1 else self.p2_prizes,
-            "opponent_prizes": self.p2_prizes if is_p1 else self.p1_prizes
-        }
+from game_env import PokemonBattleEnv
 
 def run_evaluation_match(num_games=100):
     rl_agent = PokemonTCGAgent()
@@ -27,53 +10,63 @@ def run_evaluation_match(num_games=100):
     baseline_wins = 0
     draws = 0
 
-    print(f"=== LAUNCHING HEAD-TO-HEAD BENCHMARK ({num_games} GAMES) ===")
-    print("RL Agent (submission.py)  VS  Baseline Rule Agent (baseline_agent.py)\n")
+    print(f"=== BENCHMARK: 12-ACTION REGULATION MATCHES ({num_games} GAMES) ===")
+    print("RL Agent (P1)  VS  Targeted Baseline Agent (P2)\n")
 
     for game in range(1, num_games + 1):
-        env = SimulatedGameEnvironment()
-        turn_limit = 30
-        
-        for turn in range(turn_limit):
-            legal_actions = ["ATTACH_ENERGY", "ATTACK", "PASS_TURN"]
+        env = PokemonBattleEnv()
+        done = False
+        turn_limit = 50
+        current_turn = 0
 
-            # --- RL Agent Turn (Player 1) ---
-            p1_state = env.get_state(is_p1=True)
-            rl_action = rl_agent.act(p1_state, legal_actions)
-            
-            if "ATTACK" in rl_action:
-                env.p2_prizes -= 1
-                
-            if env.p2_prizes <= 0:
-                rl_wins += 1
+        while not done and current_turn < turn_limit:
+            current_turn += 1
+
+            # Player 1 (RL Agent)
+            p1_active = True
+            p1_actions = 0
+            while p1_active and not done and p1_actions < 5:
+                p1_actions += 1
+                state = env.get_state(is_p1=True)
+                legal = env.get_legal_actions(is_p1=True)
+                action = rl_agent.act(state, legal)
+                _, _, done, _ = env.step(action, is_p1=True)
+                if action.startswith("ATTACK") or action == "PASS_TURN" or done:
+                    p1_active = False
+
+            if done:
                 break
 
-            # --- Baseline Agent Turn (Player 2) ---
-            p2_state = env.get_state(is_p1=False)
-            base_action = baseline_agent.select_action(p2_state, legal_actions)
-            
-            if "ATTACK" in base_action:
-                env.p1_prizes -= 1
-                
-            if env.p1_prizes <= 0:
-                baseline_wins += 1
+            # Player 2 (Baseline Agent)
+            p2_active = True
+            p2_actions = 0
+            while p2_active and not done and p2_actions < 5:
+                p2_actions += 1
+                state = env.get_state(is_p1=False)
+                legal = env.get_legal_actions(is_p1=False)
+                action = baseline_agent.select_action(state, legal)
+                _, _, done, _ = env.step(action, is_p1=False)
+                if action.startswith("ATTACK") or action == "PASS_TURN" or done:
+                    p2_active = False
+
+            if done:
                 break
+
+        # Check official victory condition
+        if env.winner == "P1" or env.p1_prizes < env.p2_prizes:
+            rl_wins += 1
+        elif env.winner == "P2" or env.p2_prizes < env.p1_prizes:
+            baseline_wins += 1
         else:
-            # Tiebreaker based on remaining prize cards
-            if env.p2_prizes < env.p1_prizes:
-                rl_wins += 1
-            elif env.p1_prizes < env.p2_prizes:
-                baseline_wins += 1
-            else:
-                draws += 1
+            draws += 1
 
     win_rate = (rl_wins / num_games) * 100
-    print("=== FIXED BENCHMARK EVALUATION RESULTS ===")
-    print(f"Total Matches Played: {num_games}")
-    print(f"RL Agent Wins:       {rl_wins}")
-    print(f"Baseline Wins:       {baseline_wins}")
-    print(f"Draws:               {draws}")
-    print(f"RL Win Rate:         {win_rate:.1f}%")
+    print("=== REGULATION BENCHMARK RESULTS ===")
+    print(f"Total Games:   {num_games}")
+    print(f"RL Agent Wins: {rl_wins}")
+    print(f"Baseline Wins: {baseline_wins}")
+    print(f"Draws:         {draws}")
+    print(f"RL Win Rate:   {win_rate:.1f}%")
 
 if __name__ == "__main__":
     run_evaluation_match(100)
